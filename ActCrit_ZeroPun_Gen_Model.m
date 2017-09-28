@@ -12,8 +12,10 @@
 
 numRounds = 1000; % Determined by number of trials
 numSubj = 1000;
-actorTable = [0,0;0,0;0,0;0,0]; % p(s,a) policy preferences
-criticTable = [0,0,0,0,0,0,0,0,0,0]; % V(s) state values
+actorTable = zeros(4,2); % p(s,a) policy preferences
+criticTable = zeros(1,10); % V(s) state values
+traceStateTable = zeros(1,10); % eligibility traces for state values
+traceActionTable = zeros(4,2); % eligibility traces for action values
 genRewardTable = zeros(numRounds,6); % To generate nonstationary with reflection
 rewardTable = zeros(numRounds,4); % True rewards table
 maxReward = 4;
@@ -23,8 +25,10 @@ currentState = 1;
 resultsMatrix = zeros(numRounds, 3); % [terminal, reward, optimal terminal, optimal reward]
 terminal = 0;
 gamma = .9;
-alpha = .5;
-beta = .2;
+lambda = .95; % ask Adam
+alpha = .1;
+beta = .1;
+tau = .2;
 numStay = zeros(1,3);
 numGo = zeros(1,3);
 
@@ -43,8 +47,8 @@ for i=1:numSubj
     % Normalizing symemetric rewards so beta reflects range 0 to 10, g. prior
     % rewardTable = (rewardTable + ((maxReward - minReward) ./ 2)) ./ (maxReward - minReward);
     rewardTable(:,5:10) = genRewardTable; %collapse reward tables
-    rewardTable(rewardTable(:,:) < -1) = -3;
-    rewardTable(rewardTable(:,:) > 1) = 3;
+%     rewardTable(rewardTable(:,:) < -1) = -3;
+%     rewardTable(rewardTable(:,:) > 1) = 3;
     rewardTable(rewardTable(:,:) > -2 & rewardTable(:,:) < 2) = 0;
     
     [maxReward, maxState] = max(rewardTable,[],2); % find optimal rewards
@@ -53,7 +57,7 @@ for i=1:numSubj
         while ~terminal
             % Action selection; Gibbs softmax utilizing action preference
             normFactor = max(actorTable(currentState,:));
-            probDist = exp(actorTable(currentState,:)- normFactor) ./ sum(exp(actorTable(currentState,:) - normFactor)); 
+            probDist = exp((actorTable(currentState,:)- normFactor) .* tau) ./ sum(exp((actorTable(currentState,:) - normFactor).* tau)); 
             currentAction = randsample(1:2, 1, true, probDist); 
             if currentState == 1
                 firstAction = currentAction;
@@ -68,14 +72,20 @@ for i=1:numSubj
             reward = rewardTable(j, nextState);
             % TD error
             del = reward + gamma .* criticTable(nextState) - criticTable(currentState);
+            % eligibility trace update
+            traceStateTable(currentState) = traceStateTable(currentState) + 1;
+            traceActionTable(currentState, currentAction) = traceActionTable(currentState, currentAction) + 1;
             % critic updates actor
-            actorTable(currentState, currentAction) = actorTable(currentState, currentAction) + beta .* del;
+            actorTable = actorTable + beta .* del .* traceActionTable;
             % critic updates self
             if reward > -1
-                criticTable(currentState) = criticTable(currentState) + alpha .* del;
+                criticTable = criticTable + alpha .* del .* traceStateTable;
             else
-                criticTable(currentState) = criticTable(currentState) + 0 .* del;
+                criticTable = criticTable + 0 .* del .* traceStateTable; % Is this what we want? Not passing back anything if 0...consider changing e.t.? 
             end
+            traceStateTable = traceStateTable .* gamma .* lambda;
+            traceActionTable = traceActionTable .* gamma .* lambda;
+            stateTraced = 1;
             currentState = nextState;
             if currentState > 4
                 terminal = 1;
@@ -85,6 +95,8 @@ for i=1:numSubj
         % reset the task
         terminal = 0; 
         currentState = 1;
+        tracesStateTable = zeros(1,10);
+        tracesActionTable = zeros(4,2);
     end
     
     % If the round is sent to the probabilistic space, and the next round
