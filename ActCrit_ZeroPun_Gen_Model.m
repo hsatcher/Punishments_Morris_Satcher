@@ -3,7 +3,7 @@
 % Cushman Lab
 % Model Free Punishments
 % Created: 9/12/17
-% Last modified: 9/12/17
+% Last modified: 10/6/17
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 % A generative model that simulate data in line with our proposed
 % Actor-Critic Model Free learning without passing back punishments.
@@ -12,23 +12,18 @@
 
 numRounds = 1000; % Determined by number of trials
 numSubj = 100;
-actorTable = zeros(4,2); % p(s,a) policy preferences
-criticTable = zeros(1,10); % V(s) state values
-traceStateTable = zeros(1,10); % eligibility traces for state values
-traceActionTable = zeros(4,2); % eligibility traces for action values
 genRewardTable = zeros(numRounds,6); % To generate nonstationary with reflection
 rewardTable = zeros(numRounds,4); % True rewards table
 maxReward = 4;
 minReward = -4;
-RewardStDev = 1;
-currentState = 1;
-resultsMatrix = zeros(numRounds, 3); % [terminal, reward, optimal terminal, optimal reward]
+RewardStDev = 1.2;
+resultsMatrix = zeros(numRounds, 7); % [terminal, reward, optimal terminal, optimal reward]
 terminal = 0;
 gamma = .9;
-lambda = 0.95; % ask Adam
-alpha = .01;
-beta = .01;
-tau = .2;
+lambda = .95; % ask Adam
+alpha = .3;
+beta = .3;
+tau = .8;
 numStay = zeros(1,3);
 numGo = zeros(1,3);
 
@@ -54,6 +49,12 @@ for i=1:numSubj
     
     
     [maxReward, maxState] = max(rewardTable,[],2); % find optimal rewards
+    
+    currentState = 1;
+    actorTable = zeros(4,2); % p(s,a) policy preferences
+    criticTable = zeros(1,10); % V(s) state values
+    traceStateTable = zeros(1,10); % eligibility traces for state values
+    traceActionTable = zeros(4,2); % eligibility traces for action values
 
     for j=1:numRounds
         while ~terminal
@@ -63,8 +64,7 @@ for i=1:numSubj
             currentAction = randsample(1:2, 1, true, probDist); 
             if currentState == 1
                 firstAction = currentAction;
-%                 if (randsample(1:2,1,true, [20 80]) == 2)
-                 if (true)
+                if (randsample(1:2,1,true, [20 80]) == 2)
                     nextState = currentState + currentAction;
                 else
                     nextState = 4;
@@ -75,17 +75,24 @@ for i=1:numSubj
             reward = rewardTable(j, nextState);
             % TD error
             del = reward + gamma .* criticTable(nextState) - criticTable(currentState);
-            % eligibility trace update
-            traceStateTable(currentState) = traceStateTable(currentState) + 1;
-            traceActionTable(currentState, currentAction) = traceActionTable(currentState, currentAction) + 1;
-            % critic updates actor
-            actorTable = actorTable + beta .* del .* traceActionTable;
-            % critic updates self
+            
             if reward > -1
+                % eligibility trace update
+                traceStateTable(currentState) = traceStateTable(currentState) + 1;
+                traceActionTable(currentState, currentAction) = traceActionTable(currentState, currentAction) + 1;
+                % critic updates self
                 criticTable = criticTable + alpha .* del .* traceStateTable;
             else
-                criticTable = criticTable + alpha .* del .* traceStateTable; % Is this what we want? Not passing back anything if 0...consider changing e.t.? 
+                % eligibility trace update
+                traceStateTable = zeros(1,10); % effectively set lambda to 0
+                traceActionTable = zeros(4,2); % effectively set lambda to 0
+                traceStateTable(currentState) = traceStateTable(currentState) + 1;
+                traceActionTable(currentState, currentAction) = traceActionTable(currentState, currentAction) + 1;
+                % critic updates self
+                criticTable = criticTable + 0 .* del .* traceStateTable; 
             end
+            % critic updates actor
+            actorTable = actorTable + beta .* del .* traceActionTable; 
             traceStateTable = traceStateTable .* gamma .* lambda;
             traceActionTable = traceActionTable .* gamma .* lambda;
             currentState = nextState;
@@ -93,14 +100,14 @@ for i=1:numSubj
                 terminal = 1;
             end
         end
-        resultsMatrix(j, :) = [firstAction, currentState, reward]; %log results; first action taken, T state, reward received
+        resultsMatrix(j, :) = [firstAction, currentState, reward, del, criticTable(1), actorTable(1,1), actorTable(1,2)]; %log results; first action taken, T state, reward received
         % reset the task
         terminal = 0; 
-        currentState = 2;
+        currentState = 1;
         traceStateTable = zeros(1,10);
         traceActionTable = zeros(4,2);
     end
-    meanResults(1,i) = mean(resultsMatrix(:, 3));
+    meanResults(1,i) = mean(resultsMatrix(:, 4));
     
     % If the round is sent to the probabilistic space, and the next round
     % attempts the same action again, mark as stay, otherwise goes.
